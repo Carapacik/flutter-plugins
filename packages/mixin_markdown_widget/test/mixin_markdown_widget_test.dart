@@ -4587,6 +4587,87 @@ const veryLongValueName = 42;
   });
 
   testWidgets(
+      'quoted code blocks subscribe selection overlay to nested horizontal scrolls',
+      (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 220,
+            child: MarkdownWidget(
+              data: '''
+> ```dart
+> const veryLongValueName = 42;
+> ```
+''',
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final quoteFinder = find.byWidgetPredicate(
+      (widget) =>
+          widget is SelectableMarkdownBlock &&
+          widget.spec.plainText.contains('const veryLongValueName = 42;'),
+    );
+    final quoteWidget = tester.widget<SelectableMarkdownBlock>(quoteFinder);
+
+    expect(quoteWidget.spec.repaintListenable, isNotNull);
+  });
+
+  testWidgets('quoted code block selection is clipped to the nested viewport',
+      (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 220,
+            child: MarkdownWidget(
+              data: '''
+> ```dart
+> const veryLongValueName = 42;
+> ```
+''',
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final quoteFinder = find.byWidgetPredicate(
+      (widget) =>
+          widget is SelectableMarkdownBlock &&
+          widget.spec.plainText.contains('const veryLongValueName = 42;'),
+    );
+    final quoteWidget = tester.widget<SelectableMarkdownBlock>(quoteFinder);
+    final horizontalScrollViewFinder = find.byWidgetPredicate(
+      (widget) =>
+          widget is SingleChildScrollView &&
+          widget.scrollDirection == Axis.horizontal,
+    );
+    final scrollable = tester.widget<SingleChildScrollView>(
+      horizontalScrollViewFinder,
+    );
+
+    scrollable.controller!.jumpTo(60);
+    await tester.pump();
+
+    final globalSelectionRects = _globalSelectionRectsForBlock(
+      tester,
+      quoteFinder,
+      start: 0,
+      end: quoteWidget.spec.plainText.length,
+    );
+    final viewportRect = tester.getRect(horizontalScrollViewFinder);
+    final mergedRect = _mergedRect(globalSelectionRects);
+
+    expect(globalSelectionRects, isNotEmpty);
+    expect(mergedRect.left, greaterThanOrEqualTo(viewportRect.left - 0.5));
+    expect(mergedRect.right, lessThanOrEqualTo(viewportRect.right + 0.5));
+  });
+
+  testWidgets(
       'quoted code blocks merge adjacent syntax-highlight selection boxes', (
     tester,
   ) async {
@@ -4663,6 +4744,59 @@ const veryLongValueName = 42;
         );
       }
     }
+  });
+
+  testWidgets('quoted table selection is clipped to the nested viewport', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 220,
+            child: MarkdownWidget(
+              data: '''
+> | A | B | C | D | E |
+> | --- | --- | --- | --- | --- |
+> | alpha | beta | gamma | delta | epsilon |
+''',
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final quoteFinder = find.byWidgetPredicate(
+      (widget) =>
+          widget is SelectableMarkdownBlock &&
+          widget.spec.plainText.contains('alpha') &&
+          widget.spec.plainText.contains('epsilon'),
+    );
+    final quoteWidget = tester.widget<SelectableMarkdownBlock>(quoteFinder);
+    final horizontalScrollViewFinder = find.byWidgetPredicate(
+      (widget) =>
+          widget is SingleChildScrollView &&
+          widget.scrollDirection == Axis.horizontal,
+    );
+    final scrollable = tester.widget<SingleChildScrollView>(
+      horizontalScrollViewFinder,
+    );
+
+    scrollable.controller!.jumpTo(80);
+    await tester.pump();
+
+    final globalSelectionRects = _globalSelectionRectsForBlock(
+      tester,
+      quoteFinder,
+      start: 0,
+      end: quoteWidget.spec.plainText.length,
+    );
+    final viewportRect = tester.getRect(horizontalScrollViewFinder);
+    final mergedRect = _mergedRect(globalSelectionRects);
+
+    expect(globalSelectionRects, isNotEmpty);
+    expect(mergedRect.left, greaterThanOrEqualTo(viewportRect.left - 0.5));
+    expect(mergedRect.right, lessThanOrEqualTo(viewportRect.right + 0.5));
   });
 
   testWidgets(

@@ -1578,6 +1578,39 @@ class MarkdownSelectionResolver {
     return result;
   }
 
+  Rect? _resolveViewportRectInRoot(
+    RenderBox rootRenderObject,
+    GlobalKey? viewportKey,
+  ) {
+    final viewportRenderObject =
+        viewportKey?.currentContext?.findRenderObject();
+    if (viewportRenderObject is! RenderBox || !viewportRenderObject.hasSize) {
+      return null;
+    }
+    final origin = rootRenderObject.globalToLocal(
+      viewportRenderObject.localToGlobal(Offset.zero),
+    );
+    return origin & viewportRenderObject.size;
+  }
+
+  List<Rect> _clipSelectionRectsToViewport(
+    List<Rect> rects,
+    Rect? viewportRect,
+  ) {
+    if (viewportRect == null || rects.isEmpty) {
+      return rects;
+    }
+
+    final clippedRects = <Rect>[];
+    for (final rect in rects) {
+      final clipped = rect.intersect(viewportRect);
+      if (!clipped.isEmpty) {
+        clippedRects.add(clipped);
+      }
+    }
+    return clippedRects;
+  }
+
   TextAlign _textAlignForTableColumn(MarkdownTableColumnAlignment alignment) {
     switch (alignment) {
       case MarkdownTableColumnAlignment.center:
@@ -2223,11 +2256,18 @@ class MarkdownSelectionResolver {
   }) {
     switch (block.kind) {
       case MarkdownBlockKind.table:
-        return _resolveTableSelectionRectsInRoot(
-          context,
-          rootRenderObject: rootRenderObject,
-          block: block as TableBlock,
-          range: range,
+        final tableBlock = block as TableBlock;
+        return _clipSelectionRectsToViewport(
+          _resolveTableSelectionRectsInRoot(
+            context,
+            rootRenderObject: rootRenderObject,
+            block: tableBlock,
+            range: range,
+          ),
+          _resolveViewportRectInRoot(
+            rootRenderObject,
+            keysRegistry.tableViewportKeys[tableBlock.id],
+          ),
         );
       case MarkdownBlockKind.heading:
       case MarkdownBlockKind.paragraph:
@@ -2285,6 +2325,10 @@ class MarkdownSelectionResolver {
           theme: theme,
           language: codeBlock.language,
         );
+        final viewportRect = _resolveViewportRectInRoot(
+          rootRenderObject,
+          keysRegistry.codeBlockViewportKeys[codeBlock.id],
+        );
         if (markdownPretextCanUseDirectRichTextGeometry(codeRuns)) {
           final directRects = _resolveDirectRenderParagraphSelectionRects(
             renderObject,
@@ -2293,24 +2337,27 @@ class MarkdownSelectionResolver {
             runs: codeRuns,
           );
           if (directRects != null) {
-            return directRects;
+            return _clipSelectionRectsToViewport(directRects, viewportRect);
           }
           throw _missingDirectRenderParagraphError(descriptor);
         }
-        return resolveTextSpanSelectionRects(
-          codeSyntaxHighlighter.buildTextSpan(
-            source: codeBlock.code,
-            baseStyle: theme.codeBlockStyle,
-            theme: theme,
-            language: codeBlock.language,
+        return _clipSelectionRectsToViewport(
+          resolveTextSpanSelectionRects(
+            codeSyntaxHighlighter.buildTextSpan(
+              source: codeBlock.code,
+              baseStyle: theme.codeBlockStyle,
+              theme: theme,
+              language: codeBlock.language,
+            ),
+            range,
+            size: renderObject.size,
+            textDirection: textDirection,
+            measurementPadding:
+                theme.codeBlockPadding.resolve(Directionality.of(context)) +
+                    const EdgeInsets.only(top: 36), // _codeToolbarHeight
+            origin: origin,
           ),
-          range,
-          size: renderObject.size,
-          textDirection: textDirection,
-          measurementPadding:
-              theme.codeBlockPadding.resolve(Directionality.of(context)) +
-                  const EdgeInsets.only(top: 36), // _codeToolbarHeight
-          origin: origin,
+          viewportRect,
         );
       case MarkdownBlockKind.image:
       case MarkdownBlockKind.thematicBreak:

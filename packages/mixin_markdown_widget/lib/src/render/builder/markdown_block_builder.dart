@@ -416,6 +416,8 @@ class MarkdownBlockBuilder {
           highlightBorderRadius: BorderRadius.circular(16),
           selectionPaintOrder: SelectableBlockSelectionPaintOrder.aboveChild,
           selectionColor: _quoteSelectionColor,
+          repaintListenable:
+              _nestedScrollableRepaintListenableForBlocks(quoteBlock.children),
           selectionRectResolver: (context, _, range) =>
               selectionResolver.resolveQuoteSelectionRects(
             context,
@@ -469,6 +471,8 @@ class MarkdownBlockBuilder {
           ),
           hitTestBehavior: SelectableBlockHitTestBehavior.text,
           textSpan: descriptor.span,
+          repaintListenable:
+              _nestedScrollableRepaintListenableForListBlock(listBlock),
           selectionRectResolver: (context, _, range) =>
               selectionResolver.resolveListSelectionRects(
             context,
@@ -538,6 +542,8 @@ class MarkdownBlockBuilder {
           ),
           hitTestBehavior: SelectableBlockHitTestBehavior.text,
           textSpan: footnoteDescriptor.span,
+          repaintListenable:
+              _nestedScrollableRepaintListenableForListBlock(orderedFootnotes),
           selectionRectResolver: (context, _, range) =>
               selectionResolver.resolveListSelectionRects(
             context,
@@ -1397,10 +1403,15 @@ class MarkdownBlockBuilder {
     );
     final scrollController = keysRegistry.codeBlockScrollControllers
         .putIfAbsent(block.id, ScrollController.new);
+    final viewportKey = keysRegistry.codeBlockViewportKeys.putIfAbsent(
+      block.id,
+      () => GlobalKey(debugLabel: 'code-viewport-${block.id}'),
+    );
     return _buildDecoratedCodeBlock(
       block,
       codeSpan: codeHighlightPresentation.span,
       scrollController: scrollController,
+      viewportKey: viewportKey,
     );
   }
 
@@ -1440,6 +1451,74 @@ class MarkdownBlockBuilder {
     return origin & viewportRenderObject.size;
   }
 
+  Listenable? _nestedScrollableRepaintListenableForListBlock(ListBlock block) {
+    return _nestedScrollableRepaintListenableForBlocks(
+      block.items.expand((item) => item.children),
+    );
+  }
+
+  Listenable? _nestedScrollableRepaintListenableForBlocks(
+    Iterable<BlockNode> blocks,
+  ) {
+    final listenables = <Listenable>{};
+
+    void collect(BlockNode block) {
+      switch (block.kind) {
+        case MarkdownBlockKind.codeBlock:
+          listenables.add(
+            keysRegistry.codeBlockScrollControllers
+                .putIfAbsent(block.id, ScrollController.new),
+          );
+          return;
+        case MarkdownBlockKind.table:
+          listenables.add(
+            keysRegistry.tableScrollControllers
+                .putIfAbsent(block.id, ScrollController.new),
+          );
+          return;
+        case MarkdownBlockKind.quote:
+          for (final child in (block as QuoteBlock).children) {
+            collect(child);
+          }
+          return;
+        case MarkdownBlockKind.orderedList:
+        case MarkdownBlockKind.unorderedList:
+          final listBlock = block as ListBlock;
+          for (final item in listBlock.items) {
+            for (final child in item.children) {
+              collect(child);
+            }
+          }
+          return;
+        case MarkdownBlockKind.footnoteList:
+          collect(
+            MarkdownDescriptorExtractor.footnoteListAsOrderedList(
+              block as FootnoteListBlock,
+            ),
+          );
+          return;
+        case MarkdownBlockKind.heading:
+        case MarkdownBlockKind.paragraph:
+        case MarkdownBlockKind.definitionList:
+        case MarkdownBlockKind.image:
+        case MarkdownBlockKind.thematicBreak:
+          return;
+      }
+    }
+
+    for (final block in blocks) {
+      collect(block);
+    }
+
+    if (listenables.isEmpty) {
+      return null;
+    }
+    if (listenables.length == 1) {
+      return listenables.first;
+    }
+    return Listenable.merge(listenables.toList(growable: false));
+  }
+
   Widget _buildTable(
     BuildContext context,
     TableBlock block, {
@@ -1448,14 +1527,24 @@ class MarkdownBlockBuilder {
     ScrollController? scrollController,
     GlobalKey? viewportKey,
   }) {
+    final resolvedCellKeys = keysRegistry.tableCellKeysFor(block);
+    final resolvedCellTextKeys = keysRegistry.tableCellTextKeysFor(block);
+    final resolvedViewportKey = viewportKey ??
+        keysRegistry.tableViewportKeys.putIfAbsent(
+          block.id,
+          () => GlobalKey(debugLabel: 'table-viewport-${block.id}'),
+        );
     return MarkdownTableBlockView(
       theme: theme,
       block: block,
       layoutPlan: tableLayoutPlanCache.planFor(block),
       textWidgetBuilder: _buildInlineTextWidget,
-      cellKeyBuilder: cellKeyBuilder,
-      cellTextKeyBuilder: cellTextKeyBuilder,
-      viewportKey: viewportKey,
+      cellKeyBuilder: cellKeyBuilder ??
+          (rowIndex, columnIndex) => resolvedCellKeys[rowIndex][columnIndex],
+      cellTextKeyBuilder: cellTextKeyBuilder ??
+          (rowIndex, columnIndex) =>
+              resolvedCellTextKeys[rowIndex][columnIndex],
+      viewportKey: resolvedViewportKey,
       scrollController: scrollController ??
           keysRegistry.tableScrollControllers
               .putIfAbsent(block.id, ScrollController.new),
