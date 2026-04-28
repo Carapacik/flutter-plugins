@@ -1,5 +1,7 @@
 # mixin_markdown_widget
 
+[![Pub](https://img.shields.io/pub/v/mixin_markdown_widget.svg)](https://pub.dev/packages/mixin_markdown_widget)
+
 `mixin_markdown_widget` is a high-performance, desktop-first Flutter Markdown reader package. It focuses on a high-quality reading surface, highly customizable block-based rendering, model-driven text selection, and controller APIs optimized for streaming updates (like LLM responses).
 
 ## Key Features
