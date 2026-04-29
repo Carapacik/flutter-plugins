@@ -5,16 +5,44 @@ import 'package:markdown/markdown.dart' as md;
 import '../core/document.dart';
 import 'markdown_syntaxes.dart';
 
+class MarkdownParserTiming {
+  const MarkdownParserTiming({
+    required this.totalMicros,
+    required this.markdownParseLinesMicros,
+    required this.buildBlocksMicros,
+    required this.scanRangesMicros,
+    required this.applyRangesMicros,
+    required this.normalizeInlineMicros,
+    required this.nextIdMicros,
+    required this.parseLineCount,
+  });
+
+  final int totalMicros;
+  final int markdownParseLinesMicros;
+  final int buildBlocksMicros;
+  final int scanRangesMicros;
+  final int applyRangesMicros;
+  final int normalizeInlineMicros;
+  final int nextIdMicros;
+  final int parseLineCount;
+}
+
 class MarkdownDocumentParser {
-  const MarkdownDocumentParser();
+  const MarkdownDocumentParser({this.onTiming});
+
+  final void Function(MarkdownParserTiming timing)? onTiming;
 
   static final Expando<Map<MarkdownBlockKind, int>> _documentKindCounts =
       Expando<Map<MarkdownBlockKind, int>>('markdownDocumentKindCounts');
 
   MarkdownDocument parse(String source, {int version = 0}) {
-    final normalizedSource = _normalizeSource(source);
+    final lines = _splitNormalizedLines(_normalizeSource(source));
+    return parseLines(lines, version: version);
+  }
+
+  MarkdownDocument parseLines(List<String> lines, {int version = 0}) {
     return _parseDocument(
-      normalizedSource,
+      lines,
       version: version,
       sourceOffset: 0,
       initialKindCounts: const <MarkdownBlockKind, int>{},
@@ -27,81 +55,110 @@ class MarkdownDocumentParser {
     int version = 0,
     bool assumeAppended = false,
   }) {
-    final normalizedSource = _normalizeSource(source);
-    return _parseAppendingNormalizedSource(
-      normalizedSource,
-      previousDocument: previousDocument,
-      version: version,
-      assumeAppended: assumeAppended,
-    );
+    return parse(source, version: version);
   }
 
   MarkdownDocument parseAppendingChunk(
-    String chunk, {
+    List<String> sourceLines, {
     required MarkdownDocument previousDocument,
+    required List<String> appendedLines,
+    required List<String> previousTailLines,
+    required int previousSourceLength,
+    required bool previousSourceEndsWithNewline,
+    required bool previousSourceEndsWithBlankLine,
     int version = 0,
   }) {
-    final normalizedChunk = _normalizeSource(chunk);
-    final normalizedSource = '${previousDocument.sourceText}$normalizedChunk';
-    return _parseAppendingNormalizedSource(
-      normalizedSource,
+    return _parseAppendingLines(
+      sourceLines,
       previousDocument: previousDocument,
+      appendedLines: appendedLines,
+      previousTailLines: previousTailLines,
+      previousSourceLength: previousSourceLength,
+      previousSourceEndsWithNewline: previousSourceEndsWithNewline,
+      previousSourceEndsWithBlankLine: previousSourceEndsWithBlankLine,
       version: version,
-      assumeAppended: true,
     );
   }
 
-  MarkdownDocument _parseAppendingNormalizedSource(
-    String normalizedSource, {
+  MarkdownDocument _parseAppendingLines(
+    List<String> sourceLines, {
     required MarkdownDocument previousDocument,
+    required List<String> appendedLines,
+    required List<String> previousTailLines,
+    required int previousSourceLength,
+    required bool previousSourceEndsWithNewline,
+    required bool previousSourceEndsWithBlankLine,
     required int version,
-    required bool assumeAppended,
   }) {
-    if (previousDocument.blocks.isEmpty ||
-        previousDocument.sourceText.isEmpty) {
-      return parse(normalizedSource, version: version);
+    if (previousDocument.blocks.isEmpty || previousSourceLength == 0) {
+      return parseLines(sourceLines, version: version);
     }
-    if (!assumeAppended &&
-        !normalizedSource.startsWith(previousDocument.sourceText)) {
-      return parse(normalizedSource, version: version);
+    if (_linesSourceLength(appendedLines) == 0) {
+      final document = MarkdownDocument(
+        blocks: previousDocument.blocks,
+        version: version,
+      );
+      _documentKindCounts[document] = _kindCountsForDocument(previousDocument);
+      return document;
     }
 
     final lastRange = previousDocument.blocks.last.sourceRange;
     if (lastRange == null ||
         lastRange.start < 0 ||
-        lastRange.start > previousDocument.sourceText.length) {
-      return parse(normalizedSource, version: version);
+        lastRange.start > previousSourceLength) {
+      return parseLines(sourceLines, version: version);
     }
 
-    final prefixLength = previousDocument.blocks.length - 1;
-    final prefixBlocks = prefixLength == 0
-        ? const <BlockNode>[]
-        : _BlockListPrefixView(previousDocument.blocks, prefixLength);
-    if (prefixBlocks.isNotEmpty) {
-      final prefixTailRange = prefixBlocks.last.sourceRange;
-      if (prefixTailRange == null || prefixTailRange.end > lastRange.start) {
-        return parse(normalizedSource, version: version);
+    final parseAppendedChunkAsNewBlocks = _hasBlankLineBoundary(
+          previousSourceEndsWithNewline: previousSourceEndsWithNewline,
+          previousSourceEndsWithBlankLine: previousSourceEndsWithBlankLine,
+          appendedLines: appendedLines,
+        ) &&
+        _canKeepLastBlockStableAcrossBlankAppend(previousDocument.blocks.last);
+    final prefixLength = parseAppendedChunkAsNewBlocks
+        ? previousDocument.blocks.length
+        : previousDocument.blocks.length - 1;
+    if (prefixLength > 0) {
+      final prefixTailRange =
+          previousDocument.blocks[prefixLength - 1].sourceRange;
+      final prefixBoundary = parseAppendedChunkAsNewBlocks
+          ? previousSourceLength
+          : lastRange.start;
+      if (prefixTailRange == null || prefixTailRange.end > prefixBoundary) {
+        return parseLines(sourceLines, version: version);
       }
     }
 
-    final initialKindCounts = _subtractBlockKinds(
-      _kindCountsForDocument(previousDocument),
-      previousDocument.blocks.last,
-    );
-    if (prefixLength > 0 && initialKindCounts.isEmpty) {
-      return parse(normalizedSource, version: version);
+    final initialKindCounts = parseAppendedChunkAsNewBlocks
+        ? _kindCountsForDocument(previousDocument)
+        : _subtractBlockKinds(
+            _kindCountsForDocument(previousDocument),
+            previousDocument.blocks.last,
+          );
+    if (!parseAppendedChunkAsNewBlocks &&
+        prefixLength > 0 &&
+        initialKindCounts.isEmpty) {
+      return parseLines(sourceLines, version: version);
     }
 
+    final sourceOffset =
+        parseAppendedChunkAsNewBlocks ? previousSourceLength : lastRange.start;
+    final tailLines = parseAppendedChunkAsNewBlocks
+        ? appendedLines
+        : _appendLines(previousTailLines, appendedLines);
     final tailDocument = _parseDocument(
-      normalizedSource.substring(lastRange.start),
+      tailLines,
       version: version,
-      sourceOffset: lastRange.start,
+      sourceOffset: sourceOffset,
       initialKindCounts: initialKindCounts,
     );
 
     final document = MarkdownDocument(
-      blocks: _ConcatenatedBlockList(prefixBlocks, tailDocument.blocks),
-      sourceText: normalizedSource,
+      blocks: _mergeBlockPrefix(
+        previousDocument.blocks,
+        prefixLength,
+        tailDocument.blocks,
+      ),
       version: version,
     );
     _documentKindCounts[document] = _kindCountsForDocument(tailDocument);
@@ -109,43 +166,114 @@ class MarkdownDocumentParser {
   }
 
   MarkdownDocument _parseDocument(
-    String normalizedSource, {
+    List<String> lines, {
     required int version,
     required int sourceOffset,
     required Map<MarkdownBlockKind, int> initialKindCounts,
   }) {
+    final timing = onTiming == null ? null : _MarkdownParserTimingBuilder();
+    final totalStopwatch = timing == null ? null : (Stopwatch()..start());
+    timing?.parseLineCount = lines.length;
     final document = md.Document(
       extensionSet: md.ExtensionSet.none,
       blockSyntaxes: buildMarkdownBlockSyntaxes(),
       inlineSyntaxes: buildMarkdownInlineSyntaxes(),
       encodeHtml: false,
     );
-    final nodes = document.parseLines(normalizedSource.split('\n'));
-    final builder = _MarkdownAstBuilder(initialKindCounts: initialKindCounts);
-    var blocks = builder.buildBlocks(nodes);
-    final ranges = _scanTopLevelBlockRanges(
-      normalizedSource,
-      sourceOffset: sourceOffset,
+    final nodes = _measure(
+      timing,
+      (elapsed) => timing!.markdownParseLinesMicros += elapsed,
+      () => document.parseLines(lines),
+    );
+    final builder = _MarkdownAstBuilder(
+      initialKindCounts: initialKindCounts,
+      timing: timing,
+    );
+    var blocks = _measure(
+      timing,
+      (elapsed) => timing!.buildBlocksMicros += elapsed,
+      () => builder.buildBlocks(nodes),
+    );
+    final ranges = _measure(
+      timing,
+      (elapsed) => timing!.scanRangesMicros += elapsed,
+      () => _scanTopLevelBlockRanges(
+        lines,
+        sourceOffset: sourceOffset,
+      ),
     );
     if (ranges.length == blocks.length) {
-      blocks = List<BlockNode>.generate(
-        blocks.length,
-        (index) => _withSourceRange(blocks[index], ranges[index]),
-        growable: false,
+      blocks = _measure(
+        timing,
+        (elapsed) => timing!.applyRangesMicros += elapsed,
+        () => List<BlockNode>.generate(
+          blocks.length,
+          (index) => _withSourceRange(blocks[index], ranges[index]),
+          growable: false,
+        ),
       );
     }
 
     final parsedDocument = MarkdownDocument(
       blocks: List<BlockNode>.unmodifiable(blocks),
-      sourceText: normalizedSource,
       version: version,
     );
     _documentKindCounts[parsedDocument] = builder.kindCounts;
+    if (timing != null && totalStopwatch != null) {
+      totalStopwatch.stop();
+      timing.totalMicros = totalStopwatch.elapsedMicroseconds;
+      onTiming!(timing.build());
+    }
     return parsedDocument;
   }
 
+  T _measure<T>(
+    _MarkdownParserTimingBuilder? timing,
+    void Function(int elapsedMicros) record,
+    T Function() run,
+  ) {
+    if (timing == null) {
+      return run();
+    }
+    final stopwatch = Stopwatch()..start();
+    final result = run();
+    stopwatch.stop();
+    record(stopwatch.elapsedMicroseconds);
+    return result;
+  }
+
   String _normalizeSource(String source) {
+    if (!source.contains('\r')) {
+      return source;
+    }
     return source.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+  }
+
+  List<String> _splitNormalizedLines(String source) => source.split('\n');
+
+  int _linesSourceLength(List<String> lines) {
+    if (lines.isEmpty || (lines.length == 1 && lines.first.isEmpty)) {
+      return 0;
+    }
+    var length = lines.length - 1;
+    for (final line in lines) {
+      length += line.length;
+    }
+    return length;
+  }
+
+  List<String> _appendLines(List<String> head, List<String> tail) {
+    if (head.isEmpty || _linesSourceLength(head) == 0) {
+      return List<String>.unmodifiable(tail);
+    }
+    if (tail.isEmpty || _linesSourceLength(tail) == 0) {
+      return List<String>.unmodifiable(head);
+    }
+    return List<String>.unmodifiable(<String>[
+      ...head.take(head.length - 1),
+      '${head.last}${tail.first}',
+      ...tail.skip(1),
+    ]);
   }
 
   Map<MarkdownBlockKind, int> _countBlockKinds(List<BlockNode> blocks) {
@@ -329,15 +457,70 @@ class MarkdownDocumentParser {
     }
   }
 
+  List<BlockNode> _mergeBlockPrefix(
+    List<BlockNode> previousBlocks,
+    int prefixLength,
+    List<BlockNode> tailBlocks,
+  ) {
+    if (prefixLength == 0) {
+      return tailBlocks;
+    }
+    if (tailBlocks.isEmpty) {
+      if (prefixLength == previousBlocks.length) {
+        return previousBlocks;
+      }
+      return _SegmentedBlockList.merge(
+        previousBlocks,
+        prefixLength,
+        const <BlockNode>[],
+      );
+    }
+    return _SegmentedBlockList.merge(previousBlocks, prefixLength, tailBlocks);
+  }
+
+  bool _hasBlankLineBoundary({
+    required bool previousSourceEndsWithNewline,
+    required bool previousSourceEndsWithBlankLine,
+    required List<String> appendedLines,
+  }) {
+    final appendedStartsWithNewline =
+        appendedLines.length > 1 && appendedLines.first.isEmpty;
+    final appendedStartsWithBlankLine = appendedLines.length > 2 &&
+        appendedLines[0].isEmpty &&
+        appendedLines[1].isEmpty;
+    if (previousSourceEndsWithBlankLine || appendedStartsWithBlankLine) {
+      return true;
+    }
+    return previousSourceEndsWithNewline && appendedStartsWithNewline;
+  }
+
+  bool _canKeepLastBlockStableAcrossBlankAppend(BlockNode block) {
+    switch (block.kind) {
+      case MarkdownBlockKind.heading:
+      case MarkdownBlockKind.paragraph:
+      case MarkdownBlockKind.table:
+      case MarkdownBlockKind.image:
+      case MarkdownBlockKind.thematicBreak:
+        return true;
+      case MarkdownBlockKind.quote:
+      case MarkdownBlockKind.orderedList:
+      case MarkdownBlockKind.unorderedList:
+      case MarkdownBlockKind.definitionList:
+      case MarkdownBlockKind.footnoteList:
+      case MarkdownBlockKind.details:
+      case MarkdownBlockKind.codeBlock:
+        return false;
+    }
+  }
+
   List<SourceRange> _scanTopLevelBlockRanges(
-    String source, {
+    List<String> lines, {
     required int sourceOffset,
   }) {
-    if (source.isEmpty) {
+    if (lines.isEmpty || (lines.length == 1 && lines.first.isEmpty)) {
       return const <SourceRange>[];
     }
 
-    final lines = source.split('\n');
     final lineStarts = <int>[];
     var offset = 0;
     for (final line in lines) {
@@ -460,7 +643,7 @@ class MarkdownDocumentParser {
       if (_isBlankLine(nextLine)) {
         final continuationIndex = nextIndex + 1;
         if (continuationIndex < lines.length &&
-            _isListContinuationLine(lines[continuationIndex])) {
+            _isListContinuationLineAfterBlank(lines[continuationIndex])) {
           endIndex = continuationIndex;
           continue;
         }
@@ -576,6 +759,10 @@ class MarkdownDocumentParser {
         _isIndentedCodeBlockStart(line);
   }
 
+  bool _isListContinuationLineAfterBlank(String line) {
+    return _isListMarker(line) || _leadingIndent(line) >= 2;
+  }
+
   bool _isTableStart(List<String> lines, int index) {
     if (index + 1 >= lines.length) {
       return false;
@@ -646,13 +833,161 @@ class MarkdownDocumentParser {
   );
 }
 
+class _SegmentedBlockList extends ListBase<BlockNode> {
+  _SegmentedBlockList._(this._segments, this.length);
+
+  factory _SegmentedBlockList.merge(
+    List<BlockNode> previousBlocks,
+    int prefixLength,
+    List<BlockNode> tailBlocks,
+  ) {
+    final segments = <_BlockSegment>[];
+    var length = 0;
+
+    void appendSegment(
+      List<BlockNode> source,
+      int sourceStart,
+      int segmentLength,
+    ) {
+      if (segmentLength <= 0) {
+        return;
+      }
+      segments.add(
+        _BlockSegment(
+          globalStart: length,
+          source: source,
+          sourceStart: sourceStart,
+          length: segmentLength,
+        ),
+      );
+      length += segmentLength;
+    }
+
+    if (previousBlocks is _SegmentedBlockList) {
+      previousBlocks._appendPrefixSegments(segments, prefixLength);
+      length = prefixLength;
+    } else {
+      appendSegment(previousBlocks, 0, prefixLength);
+    }
+    appendSegment(tailBlocks, 0, tailBlocks.length);
+    return _SegmentedBlockList._(
+      List<_BlockSegment>.unmodifiable(segments),
+      length,
+    );
+  }
+
+  final List<_BlockSegment> _segments;
+
+  @override
+  final int length;
+
+  @override
+  set length(int newLength) {
+    throw UnsupportedError('Cannot modify segmented block list length.');
+  }
+
+  @override
+  BlockNode operator [](int index) {
+    RangeError.checkValidIndex(index, this, null, length);
+    var low = 0;
+    var high = _segments.length - 1;
+    while (low <= high) {
+      final mid = low + ((high - low) >> 1);
+      final segment = _segments[mid];
+      if (index < segment.globalStart) {
+        high = mid - 1;
+        continue;
+      }
+      final segmentEnd = segment.globalStart + segment.length;
+      if (index >= segmentEnd) {
+        low = mid + 1;
+        continue;
+      }
+      return segment.source[segment.sourceStart + index - segment.globalStart];
+    }
+    throw StateError('Segmented block index was not found.');
+  }
+
+  @override
+  void operator []=(int index, BlockNode value) {
+    throw UnsupportedError('Cannot modify segmented block list contents.');
+  }
+
+  void _appendPrefixSegments(
+    List<_BlockSegment> output,
+    int prefixLength,
+  ) {
+    var remaining = prefixLength;
+    var globalStart = 0;
+    for (final segment in _segments) {
+      if (remaining <= 0) {
+        break;
+      }
+      final segmentLength =
+          remaining < segment.length ? remaining : segment.length;
+      output.add(
+        _BlockSegment(
+          globalStart: globalStart,
+          source: segment.source,
+          sourceStart: segment.sourceStart,
+          length: segmentLength,
+        ),
+      );
+      remaining -= segmentLength;
+      globalStart += segmentLength;
+    }
+  }
+}
+
+class _BlockSegment {
+  const _BlockSegment({
+    required this.globalStart,
+    required this.source,
+    required this.sourceStart,
+    required this.length,
+  });
+
+  final int globalStart;
+  final List<BlockNode> source;
+  final int sourceStart;
+  final int length;
+}
+
+class _MarkdownParserTimingBuilder {
+  int totalMicros = 0;
+  int markdownParseLinesMicros = 0;
+  int buildBlocksMicros = 0;
+  int scanRangesMicros = 0;
+  int applyRangesMicros = 0;
+  int normalizeInlineMicros = 0;
+  int nextIdMicros = 0;
+  int parseLineCount = 0;
+
+  MarkdownParserTiming build() {
+    return MarkdownParserTiming(
+      totalMicros: totalMicros,
+      markdownParseLinesMicros: markdownParseLinesMicros,
+      buildBlocksMicros: buildBlocksMicros,
+      scanRangesMicros: scanRangesMicros,
+      applyRangesMicros: applyRangesMicros,
+      normalizeInlineMicros: normalizeInlineMicros,
+      nextIdMicros: nextIdMicros,
+      parseLineCount: parseLineCount,
+    );
+  }
+}
+
 class _MarkdownAstBuilder {
-  _MarkdownAstBuilder({Map<MarkdownBlockKind, int>? initialKindCounts})
-      : _kindCounters = <MarkdownBlockKind, int>{
+  _MarkdownAstBuilder({
+    Map<MarkdownBlockKind, int>? initialKindCounts,
+    _MarkdownParserTimingBuilder? timing,
+  })  : _timing = timing,
+        _kindCounters = <MarkdownBlockKind, int>{
           ...?initialKindCounts,
         };
 
   final Map<MarkdownBlockKind, int> _kindCounters;
+  final _MarkdownParserTimingBuilder? _timing;
 
   Map<MarkdownBlockKind, int> get kindCounts =>
       Map<MarkdownBlockKind, int>.unmodifiable(_kindCounters);
@@ -1265,7 +1600,10 @@ class _MarkdownAstBuilder {
           break;
       }
     }
-    return _normalizeInlineSequence(inlines).nodes;
+    return _measure(
+      (elapsed) => _timing!.normalizeInlineMicros += elapsed,
+      () => _normalizeInlineSequence(inlines).nodes,
+    );
   }
 
   ({List<InlineNode> nodes, bool endsAtLineStart}) _normalizeInlineSequence(
@@ -1444,9 +1782,14 @@ class _MarkdownAstBuilder {
   }
 
   String _nextId(MarkdownBlockKind kind, String signature) {
-    final nextCount = (_kindCounters[kind] ?? 0) + 1;
-    _kindCounters[kind] = nextCount;
-    return '${kind.name}-$nextCount-${_stableHash(signature)}';
+    return _measure(
+      (elapsed) => _timing!.nextIdMicros += elapsed,
+      () {
+        final nextCount = (_kindCounters[kind] ?? 0) + 1;
+        _kindCounters[kind] = nextCount;
+        return '${kind.name}-$nextCount-${_stableHash(signature)}';
+      },
+    );
   }
 
   int _stableHash(String value) {
@@ -1458,57 +1801,18 @@ class _MarkdownAstBuilder {
     }
     return hash;
   }
-}
 
-class _BlockListPrefixView extends ListBase<BlockNode> {
-  _BlockListPrefixView(this._source, this.length);
-
-  final List<BlockNode> _source;
-  @override
-  final int length;
-
-  @override
-  set length(int newLength) {
-    throw UnsupportedError('Cannot modify block prefix view length.');
-  }
-
-  @override
-  BlockNode operator [](int index) {
-    RangeError.checkValidIndex(index, this, null, length);
-    return _source[index];
-  }
-
-  @override
-  void operator []=(int index, BlockNode value) {
-    throw UnsupportedError('Cannot modify block prefix view contents.');
-  }
-}
-
-class _ConcatenatedBlockList extends ListBase<BlockNode> {
-  _ConcatenatedBlockList(this._prefix, this._tail);
-
-  final List<BlockNode> _prefix;
-  final List<BlockNode> _tail;
-
-  @override
-  int get length => _prefix.length + _tail.length;
-
-  @override
-  set length(int newLength) {
-    throw UnsupportedError('Cannot modify concatenated block list length.');
-  }
-
-  @override
-  BlockNode operator [](int index) {
-    RangeError.checkValidIndex(index, this, null, length);
-    if (index < _prefix.length) {
-      return _prefix[index];
+  T _measure<T>(
+    void Function(int elapsedMicros) record,
+    T Function() run,
+  ) {
+    if (_timing == null) {
+      return run();
     }
-    return _tail[index - _prefix.length];
-  }
-
-  @override
-  void operator []=(int index, BlockNode value) {
-    throw UnsupportedError('Cannot modify concatenated block list contents.');
+    final stopwatch = Stopwatch()..start();
+    final result = run();
+    stopwatch.stop();
+    record(stopwatch.elapsedMicroseconds);
+    return result;
   }
 }

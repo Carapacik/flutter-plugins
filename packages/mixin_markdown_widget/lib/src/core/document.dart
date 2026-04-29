@@ -58,17 +58,14 @@ class SourceRange {
 class MarkdownDocument {
   const MarkdownDocument({
     required this.blocks,
-    required this.sourceText,
     this.version = 0,
   });
 
   const MarkdownDocument.empty()
       : blocks = const <BlockNode>[],
-        sourceText = '',
         version = 0;
 
   final List<BlockNode> blocks;
-  final String sourceText;
   final int version;
 }
 

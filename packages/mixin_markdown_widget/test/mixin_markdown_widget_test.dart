@@ -784,6 +784,7 @@ $$
     expect(controller.streamingState.hasDraft, isTrue);
     expect(controller.streamingState.committedBlocks, hasLength(1));
     expect(controller.streamingState.draftBlock, isA<ParagraphBlock>());
+    expect(controller.streamingState.buffer, '# Title\n\nParagraph');
 
     controller.commitStream();
 
@@ -795,6 +796,7 @@ $$
       () {
     final controller = MarkdownController(data: '# Title\n\nIntro');
     final initialHeading = controller.document.blocks.first as HeadingBlock;
+    final initialParagraph = controller.document.blocks[1] as ParagraphBlock;
 
     expect(initialHeading.sourceRange, isNotNull);
     expect(initialHeading.sourceRange!.start, 0);
@@ -803,8 +805,19 @@ $$
 
     expect(controller.document.blocks, hasLength(3));
     expect(identical(controller.document.blocks.first, initialHeading), isTrue);
+    expect(identical(controller.document.blocks[1], initialParagraph), isTrue);
     expect(controller.document.blocks.last.sourceRange, isNotNull);
     expect(controller.document.blocks.last.sourceRange!.start, greaterThan(0));
+  });
+
+  test('normalizes CRLF split across appended chunks', () {
+    final controller = MarkdownController(data: 'Line\r');
+
+    controller.appendChunk('\nNext');
+
+    expect(controller.data, 'Line\nNext');
+    expect(controller.streamingState.buffer, 'Line\nNext');
+    expect(controller.document.blocks, hasLength(1));
   });
 
   test('documentListenable only fires on document changes', () {
@@ -836,6 +849,29 @@ $$
       document.blocks.last.sourceRange!.start,
       greaterThan(document.blocks.first.sourceRange!.end),
     );
+  });
+
+  test('keeps top-level fenced code range separate after a list', () {
+    const input = '# Benchmark\n'
+        '\n'
+        'Paragraph with a [link](https://example.com/0).\n'
+        '\n'
+        '- First item\n'
+        '- Second item\n'
+        '\n'
+        '```dart\n'
+        'print(0);\n'
+        '```';
+
+    final document = const MarkdownDocumentParser().parse(input);
+
+    expect(document.blocks, hasLength(4));
+    expect(document.blocks[2], isA<ListBlock>());
+    expect(document.blocks[3], isA<CodeBlock>());
+    for (final block in document.blocks) {
+      expect(block.sourceRange, isNotNull);
+    }
+    expect(document.blocks[3].sourceRange!.start, input.indexOf('```dart'));
   });
 
   test('append parsing keeps stable prefix before list tail reparsing', () {
