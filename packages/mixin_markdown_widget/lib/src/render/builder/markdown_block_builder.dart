@@ -5,6 +5,7 @@ import 'dart:math' as math;
 
 import '../../clipboard/plain_text_serializer.dart';
 import '../../core/document.dart';
+import '../../debug.dart';
 import '../../selection/selection_controller.dart';
 import '../../selection/structured_block_selection.dart';
 import '../../widgets/markdown_theme.dart';
@@ -144,6 +145,9 @@ class MarkdownBlockBuilder {
     required bool fromCache,
   }) {
     stopwatch.stop();
+    if (!mixinMarkdownDebugLogging) {
+      return;
+    }
     final elapsedMs = stopwatch.elapsedMicroseconds / 1000;
     if (elapsedMs < _slowBlockBuildLogThresholdMs) {
       return;

@@ -2,36 +2,38 @@ import 'package:markdown/markdown.dart' as md;
 import 'package:html/dom.dart' as html_dom;
 import 'package:html/parser.dart' as html_parser;
 
-List<md.BlockSyntax> buildMarkdownBlockSyntaxes() {
-  return <md.BlockSyntax>[
-    const md.FencedCodeBlockSyntax(),
-    const MarkdownMathBlockSyntax(),
-    const MarkdownHtmlBlockSyntax(),
-    const md.HeaderWithIdSyntax(),
-    const md.SetextHeaderWithIdSyntax(),
-    const md.TableSyntax(),
-    const md.UnorderedListWithCheckboxSyntax(),
-    const md.OrderedListWithCheckboxSyntax(),
-    const md.FootnoteDefSyntax(),
-    const MarkdownDefinitionListSyntax(),
-  ];
-}
+final List<md.BlockSyntax> _markdownBlockSyntaxes =
+    List<md.BlockSyntax>.unmodifiable(<md.BlockSyntax>[
+  const md.FencedCodeBlockSyntax(),
+  const MarkdownMathBlockSyntax(),
+  const MarkdownHtmlBlockSyntax(),
+  const md.HeaderWithIdSyntax(),
+  const md.SetextHeaderWithIdSyntax(),
+  const md.TableSyntax(),
+  const md.UnorderedListWithCheckboxSyntax(),
+  const md.OrderedListWithCheckboxSyntax(),
+  const md.FootnoteDefSyntax(),
+  const MarkdownDefinitionListSyntax(),
+]);
 
-List<md.InlineSyntax> buildMarkdownInlineSyntaxes() {
-  return <md.InlineSyntax>[
-    MarkdownDollarMathSyntax(),
-    MarkdownBackslashMathSyntax(),
-    MarkdownInlineHtmlTagSyntax(),
-    MarkdownHighlightSyntax(),
-    MarkdownSubscriptSyntax(),
-    MarkdownSuperscriptSyntax(),
-    MarkdownDoubleTildeStrikethroughSyntax(),
-    md.EmojiSyntax(),
-    md.ColorSwatchSyntax(),
-    md.AutolinkExtensionSyntax(),
-    md.InlineHtmlSyntax(),
-  ];
-}
+final List<md.InlineSyntax> _markdownInlineSyntaxes =
+    List<md.InlineSyntax>.unmodifiable(<md.InlineSyntax>[
+  MarkdownDollarMathSyntax(),
+  MarkdownBackslashMathSyntax(),
+  MarkdownInlineHtmlTagSyntax(),
+  MarkdownHighlightSyntax(),
+  MarkdownSubscriptSyntax(),
+  MarkdownSuperscriptSyntax(),
+  MarkdownDoubleTildeStrikethroughSyntax(),
+  md.EmojiSyntax(),
+  md.ColorSwatchSyntax(),
+  md.AutolinkExtensionSyntax(),
+  md.InlineHtmlSyntax(),
+]);
+
+List<md.BlockSyntax> buildMarkdownBlockSyntaxes() => _markdownBlockSyntaxes;
+
+List<md.InlineSyntax> buildMarkdownInlineSyntaxes() => _markdownInlineSyntaxes;
 
 class MarkdownHtmlBlockSyntax extends md.BlockSyntax {
   const MarkdownHtmlBlockSyntax();
@@ -108,8 +110,7 @@ class MarkdownHtmlBlockSyntax extends md.BlockSyntax {
   }
 
   bool _isVoidLine(String line) {
-    return RegExp(r'<(?:br|img)(?:\s+[^>]*)?\s*/?>', caseSensitive: false)
-        .hasMatch(line);
+    return _voidLinePattern.hasMatch(line);
   }
 
   bool _lineContainsClosingTag(String line, String tag) {
@@ -193,7 +194,7 @@ class MarkdownHtmlBlockSyntax extends md.BlockSyntax {
 
   String _normalizeMarkdownFragmentSource(String source) {
     return _trimSurroundingBlankLines(source).replaceAllMapped(
-      RegExp(r'([^\n])\n([ \t]*(?:[-+*]|\d+[.)])\s+)', multiLine: true),
+      _tightListBreakPattern,
       (match) => '${match.group(1)}\n\n${match.group(2)}',
     );
   }
@@ -218,7 +219,7 @@ class MarkdownHtmlBlockSyntax extends md.BlockSyntax {
     if (text.contains('\n') || text.contains('\r')) {
       return false;
     }
-    return text.contains(RegExp(r'[ \t]'));
+    return _htmlHorizontalWhitespacePattern.hasMatch(text);
   }
 
   Iterable<md.Node> _convertHtmlNode(html_dom.Node node) sync* {
@@ -281,8 +282,19 @@ class MarkdownHtmlBlockSyntax extends md.BlockSyntax {
   }
 
   String _normalizeHtmlText(String text) {
-    return text.replaceAll(RegExp(r'[ \t\r\n]+'), ' ');
+    return text.replaceAll(_htmlWhitespacePattern, ' ');
   }
+
+  static final RegExp _voidLinePattern = RegExp(
+    r'<(?:br|img)(?:\s+[^>]*)?\s*/?>',
+    caseSensitive: false,
+  );
+  static final RegExp _tightListBreakPattern = RegExp(
+    r'([^\n])\n([ \t]*(?:[-+*]|\d+[.)])\s+)',
+    multiLine: true,
+  );
+  static final RegExp _htmlHorizontalWhitespacePattern = RegExp(r'[ \t]');
+  static final RegExp _htmlWhitespacePattern = RegExp(r'[ \t\r\n]+');
 }
 
 class MarkdownMathBlockSyntax extends md.BlockSyntax {
@@ -316,9 +328,14 @@ class MarkdownMathBlockSyntax extends md.BlockSyntax {
   }
 
   bool _isClosingFence(String line, String closing) {
-    return RegExp(r'^\s{0,3}' + RegExp.escape(closing) + r'\s*$')
-        .hasMatch(line);
+    return closing == r'$$'
+        ? _dollarClosingPattern.hasMatch(line)
+        : _backslashClosingPattern.hasMatch(line);
   }
+
+  static final RegExp _dollarClosingPattern = RegExp(r'^\s{0,3}\$\$\s*$');
+  static final RegExp _backslashClosingPattern =
+      RegExp(r'^\s{0,3}\\\]\s*$');
 }
 
 class MarkdownDefinitionListSyntax extends md.BlockSyntax {
@@ -670,7 +687,8 @@ class MarkdownSuperscriptSyntax extends _DelimitedInlineSyntax {
 
 bool _hasBoundaryWhitespace(String content) {
   return content.isNotEmpty &&
-      (RegExp(r'^\s').hasMatch(content) || RegExp(r'\s$').hasMatch(content));
+      (_isWhitespaceCodeUnit(content.codeUnitAt(0)) ||
+          _isWhitespaceCodeUnit(content.codeUnitAt(content.length - 1)));
 }
 
 abstract class _DelimitedInlineSyntax extends md.InlineSyntax {
@@ -782,7 +800,7 @@ _DelimitedMathMatch? _extractDelimitedMath(
   }
 
   if (!allowBoundaryWhitespace &&
-      RegExp(r'\s').hasMatch(source[contentStart])) {
+      _isWhitespaceCodeUnit(source.codeUnitAt(contentStart))) {
     return null;
   }
 
@@ -802,8 +820,8 @@ _DelimitedMathMatch? _extractDelimitedMath(
       return null;
     }
     if (!allowBoundaryWhitespace &&
-        (RegExp(r'^\s').hasMatch(content) ||
-            RegExp(r'\s$').hasMatch(content))) {
+        (_isWhitespaceCodeUnit(content.codeUnitAt(0)) ||
+            _isWhitespaceCodeUnit(content.codeUnitAt(content.length - 1)))) {
       searchIndex = closingIndex + 1;
       continue;
     }
@@ -828,9 +846,18 @@ class _DelimitedMathMatch {
 }
 
 String _trimMathContent(String content) {
-  return content
-      .replaceFirst(RegExp(r'^\n+'), '')
-      .replaceFirst(RegExp(r'\n+$'), '');
+  var start = 0;
+  var end = content.length;
+  while (start < end && content.codeUnitAt(start) == 0x0A) {
+    start += 1;
+  }
+  while (end > start && content.codeUnitAt(end - 1) == 0x0A) {
+    end -= 1;
+  }
+  if (start == 0 && end == content.length) {
+    return content;
+  }
+  return content.substring(start, end);
 }
 
 bool _isEscapedCharacter(String source, int index) {
@@ -841,4 +868,13 @@ bool _isEscapedCharacter(String source, int index) {
     cursor -= 1;
   }
   return slashCount.isOdd;
+}
+
+bool _isWhitespaceCodeUnit(int codeUnit) {
+  return codeUnit == 0x20 ||
+      codeUnit == 0x09 ||
+      codeUnit == 0x0A ||
+      codeUnit == 0x0D ||
+      codeUnit == 0x0B ||
+      codeUnit == 0x0C;
 }

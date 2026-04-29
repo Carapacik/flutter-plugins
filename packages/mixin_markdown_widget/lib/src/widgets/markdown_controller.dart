@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../clipboard/copy_serializer.dart';
 import '../clipboard/plain_text_serializer.dart';
 import '../core/document.dart';
+import '../debug.dart';
 import '../parser/markdown_document_parser.dart';
 import '../streaming/streaming_state.dart';
 
@@ -111,12 +112,14 @@ class MarkdownController extends ChangeNotifier {
       _document = _parser.parse(_data, version: _version);
     }
     parseStopwatch.stop();
-    debugPrint(
-      '[mixin_markdown_widget] parse mode=$parseMode '
-      'version=$_version chars=${_data.length} '
-      'blocks=${_document.blocks.length} '
-      'elapsed=${parseStopwatch.elapsedMicroseconds / 1000}ms',
-    );
+    if (mixinMarkdownDebugLogging) {
+      debugPrint(
+        '[mixin_markdown_widget] parse mode=$parseMode '
+        'version=$_version chars=${_data.length} '
+        'blocks=${_document.blocks.length} '
+        'elapsed=${parseStopwatch.elapsedMicroseconds / 1000}ms',
+      );
+    }
     _syncStreamingState();
     _documentVersionNotifier.value = _version;
   }

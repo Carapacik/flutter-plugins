@@ -34,6 +34,7 @@ const _darkBackgroundPresets = <_PreviewBackgroundPreset>[
 ];
 
 void main() {
+  mixinMarkdownDebugLogging = true;
   runApp(const DemoApp());
 }
 

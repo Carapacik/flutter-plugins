@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../clipboard/plain_text_serializer.dart';
 import '../core/document.dart';
+import '../debug.dart';
 import '../selection/selection_controller.dart';
 import '../widgets/markdown_theme.dart';
 import '../widgets/markdown_types.dart';
@@ -322,6 +323,9 @@ class _MarkdownDocumentViewState extends State<MarkdownDocumentView> {
     required int blockCount,
   }) {
     stopwatch.stop();
+    if (!mixinMarkdownDebugLogging) {
+      return child;
+    }
     final elapsedMs = stopwatch.elapsedMicroseconds / 1000;
     if (elapsedMs >= _slowBuildLogThresholdMs) {
       debugPrint(
