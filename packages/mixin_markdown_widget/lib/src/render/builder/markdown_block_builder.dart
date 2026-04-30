@@ -2082,13 +2082,59 @@ class MarkdownBlockBuilder {
     if (fullText.isEmpty) {
       return const <({double top, double bottom})>[];
     }
-    final allBoxes = renderParagraph.getBoxesForSelection(
-      TextSelection(baseOffset: 0, extentOffset: fullText.length),
-    );
-    if (allBoxes.isEmpty) {
+    if (fullText.contains('\uFFFC')) {
+      final allBoxes = renderParagraph.getBoxesForSelection(
+        TextSelection(baseOffset: 0, extentOffset: fullText.length),
+      );
+      return _resolveContiguousLinesFromBoxes(allBoxes);
+    }
+
+    final textPainter = TextPainter(
+      text: renderParagraph.text,
+      textAlign: renderParagraph.textAlign,
+      textDirection: renderParagraph.textDirection,
+      textScaler: renderParagraph.textScaler,
+      maxLines: null,
+    )..layout(maxWidth: renderParagraph.size.width);
+    final lines = textPainter.computeLineMetrics();
+    if (lines.isEmpty) {
       return const <({double top, double bottom})>[];
     }
 
+    // Eliminate vertical gaps between lines by expanding their top/bottom bounds
+    // to meet halfway. TextPainter limits boxes to glyph metrics, which omits
+    // the line-height multiplier spacing and leaves ugly horizontal gaps in the
+    // selection background.
+    final contiguousLines = <({double top, double bottom})>[];
+    for (var i = 0; i < lines.length; i++) {
+      final current = lines[i];
+      final previous = i > 0 ? lines[i - 1] : null;
+      final next = i < lines.length - 1 ? lines[i + 1] : null;
+      final currentTop = current.baseline - current.ascent;
+      final currentBottom = currentTop + current.height;
+
+      final resolvedTop = previous != null
+          ? (previous.baseline -
+                  previous.ascent +
+                  previous.height +
+                  currentTop) /
+              2.0
+          : currentTop;
+      final resolvedBottom = next != null
+          ? (currentBottom + next.baseline - next.ascent) / 2.0
+          : currentBottom;
+
+      contiguousLines.add((top: resolvedTop, bottom: resolvedBottom));
+    }
+    return contiguousLines;
+  }
+
+  List<({double top, double bottom})> _resolveContiguousLinesFromBoxes(
+    List<TextBox> allBoxes,
+  ) {
+    if (allBoxes.isEmpty) {
+      return const <({double top, double bottom})>[];
+    }
     final sorted = allBoxes.toList(growable: false)
       ..sort((a, b) => a.top.compareTo(b.top));
 
@@ -2107,10 +2153,6 @@ class MarkdownBlockBuilder {
     }
     lines.add((top: lineTop, bottom: lineBottom));
 
-    // Eliminate vertical gaps between lines by expanding their top/bottom bounds
-    // to meet halfway. TextPainter limits boxes to glyph metrics, which omits
-    // the line-height multiplier spacing and leaves ugly horizontal gaps in the
-    // selection background.
     final contiguousLines = <({double top, double bottom})>[];
     for (var i = 0; i < lines.length; i++) {
       final current = lines[i];

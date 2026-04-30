@@ -2752,13 +2752,23 @@ class MarkdownSelectionResolver {
     if (fullText.isEmpty) {
       return const <({double top, double bottom})>[];
     }
-    final allBoxes = renderParagraph.getBoxesForSelection(
-      TextSelection(baseOffset: 0, extentOffset: fullText.length),
-    );
-    if (allBoxes.isEmpty) {
-      return const <({double top, double bottom})>[];
+    if (fullText.contains('\uFFFC')) {
+      final allBoxes = renderParagraph.getBoxesForSelection(
+        TextSelection(baseOffset: 0, extentOffset: fullText.length),
+      );
+      return _resolveContiguousLinesFromBoxes(allBoxes);
     }
-    return _resolveContiguousLinesFromBoxes(allBoxes);
+
+    final textPainter = TextPainter(
+      text: renderParagraph.text,
+      textAlign: renderParagraph.textAlign,
+      textDirection: renderParagraph.textDirection,
+      textScaler: renderParagraph.textScaler,
+      maxLines: null,
+    )..layout(maxWidth: renderParagraph.size.width);
+    return _resolveContiguousLinesFromMetrics(
+      textPainter.computeLineMetrics(),
+    );
   }
 
   List<({double top, double bottom})> _computeTextPainterLineExtents(
@@ -2766,20 +2776,21 @@ class MarkdownSelectionResolver {
   ) {
     final fullText =
         textPainter.text?.toPlainText(includePlaceholders: true) ?? '';
-    if (fullText.isEmpty) {
-      return const <({double top, double bottom})>[];
+    if (fullText.contains('\uFFFC')) {
+      final allBoxes = textPainter.getBoxesForSelection(
+        TextSelection(baseOffset: 0, extentOffset: fullText.length),
+      );
+      return _resolveContiguousLinesFromBoxes(allBoxes);
     }
-    final allBoxes = textPainter.getBoxesForSelection(
-      TextSelection(baseOffset: 0, extentOffset: fullText.length),
-    );
-    if (allBoxes.isEmpty) {
-      return const <({double top, double bottom})>[];
-    }
-    return _resolveContiguousLinesFromBoxes(allBoxes);
+    return _resolveContiguousLinesFromMetrics(textPainter.computeLineMetrics());
   }
 
   List<({double top, double bottom})> _resolveContiguousLinesFromBoxes(
-      List<TextBox> allBoxes) {
+    List<TextBox> allBoxes,
+  ) {
+    if (allBoxes.isEmpty) {
+      return const <({double top, double bottom})>[];
+    }
     final sorted = allBoxes.toList(growable: false)
       ..sort((a, b) => a.top.compareTo(b.top));
 
@@ -2809,6 +2820,36 @@ class MarkdownSelectionResolver {
           : current.top;
       final resolvedBottom =
           next != null ? (current.bottom + next.top) / 2.0 : current.bottom;
+
+      contiguousLines.add((top: resolvedTop, bottom: resolvedBottom));
+    }
+    return contiguousLines;
+  }
+
+  List<({double top, double bottom})> _resolveContiguousLinesFromMetrics(
+    List<LineMetrics> lines,
+  ) {
+    if (lines.isEmpty) {
+      return const <({double top, double bottom})>[];
+    }
+    final contiguousLines = <({double top, double bottom})>[];
+    for (var i = 0; i < lines.length; i++) {
+      final current = lines[i];
+      final previous = i > 0 ? lines[i - 1] : null;
+      final next = i < lines.length - 1 ? lines[i + 1] : null;
+      final currentTop = current.baseline - current.ascent;
+      final currentBottom = currentTop + current.height;
+
+      final resolvedTop = previous != null
+          ? (previous.baseline -
+                  previous.ascent +
+                  previous.height +
+                  currentTop) /
+              2.0
+          : currentTop;
+      final resolvedBottom = next != null
+          ? (currentBottom + next.baseline - next.ascent) / 2.0
+          : currentBottom;
 
       contiguousLines.add((top: resolvedTop, bottom: resolvedBottom));
     }

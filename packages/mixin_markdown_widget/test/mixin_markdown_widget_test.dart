@@ -5040,6 +5040,64 @@ const veryLongValueName = 42;
     );
   });
 
+  testWidgets('quote partial selection does not paint the next visual line',
+      (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 760,
+            child: MarkdownWidget(
+              data: '''
+**automation-bot**
+ [**2 new commit**](https://example.com/acme/status-monitor/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) **pushed to** [**main**](https://example.com/acme/status-monitor/tree/main)
+> [**aaaaaaa**](https://example.com/acme/status-monitor/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) - :pencil: Update summary in README [skip ci] [monitor]
+> [**bbbbbbb**](https://example.com/acme/status-monitor/commit/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) - :card_file_box: Update status summary [skip ci] [monitor]
+''',
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final quoteFinder = find.byWidgetPredicate(
+      (widget) =>
+          widget is SelectableMarkdownBlock &&
+          widget.spec.plainText.contains('Update summary in README') &&
+          widget.spec.plainText.contains('Update status summary'),
+    );
+    final quoteWidget = tester.widget<SelectableMarkdownBlock>(quoteFinder);
+    final quoteText = quoteWidget.spec.plainText;
+    final firstStart = quoteText.indexOf('ummary in README');
+    final firstEnd = firstStart + 'ummary in README'.length;
+    final secondStart = quoteText.indexOf('status summary [skip');
+    final secondEnd = secondStart + 'status summary [skip'.length;
+
+    expect(firstStart, greaterThanOrEqualTo(0));
+    expect(secondStart, greaterThanOrEqualTo(0));
+
+    final firstRects = _globalSelectionRectsForBlock(
+      tester,
+      quoteFinder,
+      start: firstStart,
+      end: firstEnd,
+    );
+    final secondRects = _globalSelectionRectsForBlock(
+      tester,
+      quoteFinder,
+      start: secondStart,
+      end: secondEnd,
+    );
+
+    expect(firstRects, isNotEmpty);
+    expect(secondRects, isNotEmpty);
+    for (final first in firstRects) {
+      for (final second in secondRects) {
+        expect(first.overlaps(second), isFalse);
+      }
+    }
+  });
+
   testWidgets(
       'quote uses a separate rounded side bar with transparent background', (
     tester,
